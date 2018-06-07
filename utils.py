@@ -48,6 +48,46 @@ Limitations and to be implemented:
 
 '''
 
+def reduce_mask(mask, msize, bsize,	bcount, boffset, bstride, thresh = 0.5):
+    assert len(mask.get_shape()) == 3, 'Expect mask rank = 3'
+    assert type(bsize) in [list, tuple], '`bsize` needs to be a list or tuple.'
+    assert type(bcount) in [list, tuple], '`bcount` needs to be a list or tuple.'
+    assert type(boffset) in [list, tuple], '`boffset` needs to be a list or tuple.'
+    assert type(bstride) in [list, tuple], '`bsize` needs to be a list or tuple.'
+
+    assert bsize[0] == bsize[1], 'Expect block to be a square, bsize[0] == bsize[1]' 
+    
+    assert msize[1]%bcount[0] == 0 and msize[2]%bcount[1] == 0, 'Mask cannot be partioned into given grid shape'
+
+    activeBlockIndices = np.empty(0, 3)
+    count_index
+	for N in range(msize[0]):  #loop through batches 
+		for h0 in range(bcount[0]): #loop through grid 
+			for w0 in range(bcount[1]):
+				bh_index = boffset[0] + h0*bstride[0]
+				bw_index = boffset[1] + w0*bstride[1]
+				active = False  #flag to indicate weather a box is active
+				block = mask[N, bh_index:min(bh_index+bsize[0], msize[1]), bw_index:min(bw_index+bsize[1], msize[2])]
+				val = block.mean()
+				if val > thresh:
+					active = True
+				if active:
+					activeBlockIndices[count_index] = [N, bh_index, bw_index]
+					count_index += 1
+	return activeBlockIndices
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
