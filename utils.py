@@ -17,7 +17,7 @@ import torch.nn.functional as F
 
 
 def reduce_mask(mask, msize, bsize,	bcount, boffset, bstride, thresh = 0.5):
-    '''
+	'''
 	Reduce mask operation:
 	Takes a binary mask as input and after performing avg pooling selects active blocks
 	and return indices of the active blocks
@@ -45,21 +45,23 @@ def reduce_mask(mask, msize, bsize,	bcount, boffset, bstride, thresh = 0.5):
 		manually input offsets and strides, write a func to calculate
 
 	Ideas to improve this:
-		use Fig 4 logic, this will greatly speed it up : 
+		use a avg pool or max pool layer insted of iterating! 
+		problem: gradients ?
 
 	'''
-    assert len(mask.get_shape()) == 3, 'Expect mask rank = 3'
-    assert type(bsize) in [list, tuple], '`bsize` needs to be a list or tuple.'
-    assert type(bcount) in [list, tuple], '`bcount` needs to be a list or tuple.'
-    assert type(boffset) in [list, tuple], '`boffset` needs to be a list or tuple.'
-    assert type(bstride) in [list, tuple], '`bsize` needs to be a list or tuple.'
 
-    assert bsize[0] == bsize[1], 'Expect block to be a square, bsize[0] == bsize[1]' 
-    
-    assert msize[1]%bcount[0] == 0 and msize[2]%bcount[1] == 0, 'Mask cannot be partioned into given grid shape'
+	assert len(mask.size()) == 3, 'Expect mask rank = 3'
+	assert type(bsize) in [list, tuple], '`bsize` needs to be a list or tuple.'
+	assert type(bcount) in [list, tuple], '`bcount` needs to be a list or tuple.'
+	assert type(boffset) in [list, tuple], '`boffset` needs to be a list or tuple.'
+	assert type(bstride) in [list, tuple], '`bsize` needs to be a list or tuple.'
 
-    activeBlockIndices = []
-    count_index
+	assert bsize[0] == bsize[1], 'Expect block to be a square, bsize[0] == bsize[1]' 
+
+	assert msize[1]%bcount[0] == 0 and msize[2]%bcount[1] == 0, 'Mask cannot be partioned into given grid shape'
+
+	activeBlockIndices = []
+	count_index = 0
 	for N in range(msize[0]):  #loop through batches 
 		for h0 in range(bcount[0]): #loop through grid 
 			for w0 in range(bcount[1]):
@@ -67,14 +69,16 @@ def reduce_mask(mask, msize, bsize,	bcount, boffset, bstride, thresh = 0.5):
 				bw_index = boffset[1] + w0*bstride[1]
 				active = False  #flag to indicate weather a box is active
 				block = mask[N, bh_index:min(bh_index+bsize[0], msize[1]), bw_index:min(bw_index+bsize[1], msize[2])]
-				val = block.mean()
+				val = block.mean().item()
+				#print(val)
 				if val > thresh:
 					active = True
 				if active:
-					activeBlockIndices[count_index] = [N, bh_index, bw_index]
+					activeBlockIndices.append([N, h0, w0])
 					count_index += 1
-	return activeBlockIndices
 
+
+	return np.array(activeBlockIndices)
 
 
 def sparse_gather(x, xsize, activeBlockIndices, bsize, bcount, boffset, bstride):
@@ -92,16 +96,69 @@ def sparse_gather(x, xsize, activeBlockIndices, bsize, bcount, boffset, bstride)
 		bcount						# list [grid height, grid width]
 		boffset 					# list [offset height, offset width]
 		bstride						# list [block stride h, block stride w]	
-		thresh 						# threshhold for being active
 		
-	https://github.com/pytorch/pytorch/issues/822
+	gradient flow is fine: https://github.com/pytorch/pytorch/issues/822
 
 	'''
-	compressed = torch.empty((activeBlockIndices.get_shape()[0], xsize, bsize[0], bsize[1]))
-	for B, bh_index, bw_index in activeBlockIndices:
-		block = x[N, bh_index:min(bh_index+bsize[0], xsize[2]), bw_index:min(bw_index+bsize[1], xsize[3])]
-		compressed[B] = block
-	return compressed
+	assert type(bsize) in [list, tuple], '`bsize` needs to be a list or tuple.'
+	assert type(bcount) in [list, tuple], '`bcount` needs to be a list or tuple.'
+	assert type(boffset) in [list, tuple], '`boffset` needs to be a list or tuple.'
+	assert type(bstride) in [list, tuple], '`bsize` needs to be a list or tuple.'
+
+	assert bsize[0] == bsize[1], 'Expect block to be a square, bsize[0] == bsize[1]' 
+
+	gathered = torch.empty((activeBlockIndices.shape[0], xsize[1], bsize[0], bsize[1]))
+	#print(gathered.size())
+	count_index = 0
+	for B, h0, w0 in activeBlockIndices:
+		bh_index = boffset[0] + h0*bstride[0]
+		bw_index = boffset[1] + w0*bstride[1]
+		gathered[count_index] = x[B, :, bh_index:min(bh_index+bsize[0], xsize[2]), bw_index:min(bw_index+bsize[1], xsize[3])]
+		count_index += 1
+	return gathered
+
+
+def sparse_scatter(x, xsize, gathered, gsize, activeBlockIndices, bsize, bcount, boffset, bstride, do_add = 1):
+	'''
+	Sparse scatter operation:
+
+	Takes a gathered torch tensor as input and scatters it back on the input on basis of
+	indices generated from reduce_mask. Essentialy a slicing and addition/write operation
+
+	Params:
+		x 							# torch tensor [N, C, H, W] 
+		xsize						# list [N,C,H,W] giving the shapes 
+		gathered					# torch tensor [B, C, w, h] where (w, h) is the block size 
+		gsize						# list [B,C,h,w] giving the shapes 
+		activeBlockIndices			# list [B, [N, y, x]] B,N,y,x has ususal defn, check reduce_mask
+		bsize						# list [block height, block width]
+		bcount						# list [grid height, grid width]
+		boffset 					# list [offset height, offset width]
+		bstride						# list [block stride h, block stride w]	
+		do_add						# bool that tells us weather to add the block or overwrite it
+		
+	'''
+	assert type(bsize) in [list, tuple], '`bsize` needs to be a list or tuple.'
+	assert type(bcount) in [list, tuple], '`bcount` needs to be a list or tuple.'
+	assert type(boffset) in [list, tuple], '`boffset` needs to be a list or tuple.'
+	assert type(bstride) in [list, tuple], '`bsize` needs to be a list or tuple.'
+
+	assert bsize[0] == bsize[1], 'Expect block to be a square, bsize[0] == bsize[1]' 
+
+	count_index = 0
+	for B, h0, w0 in activeBlockIndices:
+		bh_index = boffset[0] + h0*bstride[0]
+		bw_index = boffset[1] + w0*bstride[1]
+		if do_add:
+			x[B, :, bh_index:min(bh_index+bsize[0], xsize[2]), bw_index:min(bw_index+bsize[1], xsize[3])] += gathered[count_index]
+		else:
+			x[B, :, bh_index:min(bh_index+bsize[0], xsize[2]), bw_index:min(bw_index+bsize[1], xsize[3])] = gathered[count_index]
+		count_index += 1
+
+
+
+
+
 
 
 
