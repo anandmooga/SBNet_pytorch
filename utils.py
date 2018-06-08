@@ -45,8 +45,8 @@ def reduce_mask(mask, msize, bsize,	bcount, boffset, bstride, thresh = 0.5):
 		manually input offsets and strides, write a func to calculate
 
 	Ideas to improve this:
-		use a avg pool or max pool layer insted of iterating! 
-		problem: gradients ?
+		use a avg pool or max pool0 layer insted of iterating and find original indices
+		problem: gradients?
 
 	'''
 
