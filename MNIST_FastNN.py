@@ -131,9 +131,9 @@ class FastNN(nn.Module):
 		activeBlockIndices2 = reduce_mask(mask2, msize2, self.bsize, self.bcount2, self.boffset, self.bstride, thresh = 0.25)
 		x = self.srb2(x, activeBlockIndices2)
 		x = self.mp2(x)
-		print(x.size())
+		#print(x.size())
 		x = x.view(batch_size, -1)
-		print(x.size())
+		#print(x.size())
 		x = self.dense1(x)
 		x = self.act1(x)
 		return x
@@ -165,22 +165,16 @@ for epoch in range(1, num_epochs+1):
 		mask =  mask.view((size[0], size[2], size[3]))
 		mask.require_grad = False
 		#print(mask.size())
-		#print(x.size())
+		print(y.size())
 		
 		#Forward pass
+		optimizer.zero_grad()
 		output = model(x, mask)
-		
-		
-
-
-
-
-'''
-		tesst = x.numpy()
-		go_u, go_c = np.unique(tesst, return_counts = True)
-		print(go_u, go_c)
-'''
-
+		print(output.size())
+		loss = criterion(output, y)
+		loss.backward()
+		break
+			
 
 
 
