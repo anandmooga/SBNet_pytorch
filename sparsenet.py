@@ -304,3 +304,195 @@ class sparse_block(nn.Module):
 		x = self.c(x, gathered, indices)
 		return x
 
+
+
+############################################################################################################################################################
+############################################################################################################################################################
+############################################################################################################################################################
+
+
+def gather2dnew(input, indices, ksize, kstride):
+    '''
+    Sparse gather operation:
+
+    Takes a torch tensor as input and gathers blocks on basis of indices generated 
+    from reduce_mask_pool2d. Essentialy a slicing and concatenation along the batch dimension
+
+    Params:
+    :param input:		torch tensor	#[N,C,H,W] size tensor, where N is batch diemension, W, H are width and height of mask 
+    :param indices:		torch tensor 	#[B,3] where B is the number of active blocks and 3 corresponds to [N,y,x]
+    :param kszie:		[list, tuple]	#[h,w] Size of kernel to perform pooling
+    :param kstride:		[list, tuple] 	#[h_stride,w_stride] Stride of Kernel
+
+    Output:
+        Returns a [B,C,h,w] shape tensor which is the active blocks stacked in the 
+        batch diemension
+    gradient flow is fine: https://github.com/pytorch/pytorch/issues/822
+
+    Problems? : How to remove the for loop and vectorize it?
+    idea: falatten and multiply and reshape !
+    '''
+    assert torch.is_tensor(input) == True, 'Expect input to be a pytorch tensor'
+    isize = list(input.size())
+    assert len(input.size()) == 4, 'Expect input rank = 4 , [N,C,H,W]'
+
+    assert torch.is_tensor(indices) == True, 'Expect indicies to be a pytorch tensor'
+    asize = list(indices.size()) 
+
+    assert type(ksize) in [list, tuple], 'Expect `ksize` to be list or tuple'
+    assert type(kstride) in [list, tuple], 'Expect `kstride` to be list or tuple'
+    assert len(kstride) == 2 and len(ksize) == 2, 'Expect length of kstride and ksize to be 2'
+
+    x = np.array(torch.chunk(input, chunks = isize[0], dim = 0), dtype = torch.Tensor)
+    x = np.array([np.array(torch.chunk(i, chunks = isize[2]//ksize[0], dim = 2), dtype = torch.Tensor) for i in x], dtype= torch.Tensor)
+    x = np.array([np.array([np.array(torch.chunk(j, chunks = isize[3]//ksize[1], dim =3), dtype= torch.Tensor) for j in i], dtype= torch.Tensor)for i in x], dtype= torch.Tensor)
+
+    ind = indices.cpu().detach().numpy()
+    temp = x[ind[:,0],ind[:,1],ind[:,2]]
+    return torch.cat(tuple(test), dim = 0)
+
+'''
+          279 function calls in 0.014 seconds
+
+   Ordered by: internal time
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+      113    0.006    0.000    0.006    0.000 {built-in method chunk}
+        1    0.005    0.005    0.005    0.005 {built-in method cat}
+      131    0.001    0.000    0.001    0.000 {built-in method numpy.core.multiarray.array}
+       16    0.000    0.000    0.006    0.000 <ipython-input-192-a8d8e554d238>:35(<listcomp>)
+        1    0.000    0.000    0.014    0.014 <string>:1(<module>)
+        1    0.000    0.000    0.014    0.014 <ipython-input-192-a8d8e554d238>:1(gather2dnew)
+        1    0.000    0.000    0.000    0.000 {method 'cpu' of 'torch._C._TensorBase' objects}
+        1    0.000    0.000    0.001    0.001 <ipython-input-192-a8d8e554d238>:34(<listcomp>)
+        1    0.000    0.000    0.014    0.014 {built-in method builtins.exec}
+        3    0.000    0.000    0.000    0.000 {method 'size' of 'torch._C._TensorBase' objects}
+        1    0.000    0.000    0.000    0.000 {method 'numpy' of 'torch._C._TensorBase' objects}
+        2    0.000    0.000    0.000    0.000 __init__.py:113(is_tensor)
+        1    0.000    0.000    0.000    0.000 {method 'detach' of 'torch._C._TensorBase' objects}
+        2    0.000    0.000    0.000    0.000 {built-in method builtins.isinstance}
+        3    0.000    0.000    0.000    0.000 {built-in method builtins.len}
+        1    0.000    0.000    0.000    0.000 {method 'disable' of '_lsprof.Profiler' objects}
+'''
+
+
+
+
+
+
+def scatter2dnew(input, gathered, indices, ksize, kstride, add = True):
+    '''
+    Sparse scatter operation:
+
+    Takes a gathered torch tensor as input and scatters it back on the input on basis of
+    indices generated from reduce_mask. Essentialy a slicing and addition/write operation
+
+    Params:
+        :param input:		torch tensor	#[N,C,H,W] size tensor, where N is batch diemension, W, H are width and height of mask 
+        :param gathered:	torch tensor 	#[B,C,h1,w1] B,C are same as the input, h1 and w1 are deetermined on the type of convolutions used
+        :param indices:		torch tensor 	#[B,3] where B is the number of active blocks and 3 corresponds to [N,y,x]
+        :param kszie:		[list, tuple]	#[h,w] Size of kernel to perform pooling
+        :param kstride:		[list, tuple] 	#[h_stride,w_stride] Stride of Kernel
+        :param add:			bool 			#Decides weather to add the values or replace them while scattering
+    Output:
+        A tensor of same shape as input, but it has been updatd with the scattered values
+    '''
+    assert torch.is_tensor(input) == True, 'Expect input to be a pytorch tensor'
+    assert len(input.size()) == 4, 'Expect input rank = 4 , [N,C,H,W]'
+    isize = list(input.size())
+
+    assert torch.is_tensor(indices) == True, 'Expect indicies to be a pytorch tensor'
+
+    assert torch.is_tensor(gathered) == True, 'Expect gathered to be a pytorch tensor'
+    gsize = list(gathered.size())
+
+    assert type(ksize) in [list, tuple], 'Expect `ksize` to be list or tuple'
+    assert type(kstride) in [list, tuple], 'Expect `kstride` to be list or tuple'
+    assert len(kstride) == 2 and len(ksize) == 2, 'Expect length of kstride and ksize to be 2'
+    
+    x = np.array(torch.chunk(input, chunks = isize[0], dim = 0), dtype = torch.Tensor)
+    x = np.array([np.array(torch.chunk(i, chunks = isize[2]//ksize[0], dim = 2), dtype = torch.Tensor) for i in x], dtype= torch.Tensor)
+    x = np.array([np.array([np.array(torch.chunk(j, chunks = isize[3]//ksize[1], dim =3), dtype= torch.Tensor) for j in i], dtype= torch.Tensor)for i in x], dtype= torch.Tensor)
+    
+    g = np.array(torch.chunk(gathered, chunks = gsize[0], dim =0), dtype = torch.Tensor)
+    ind = indices.cpu().detach().numpy()
+    
+    x[ind[:,0],ind[:,1],ind[:,2]] = g
+    
+    x = [[torch.cat(tuple(j) , dim = 3) for j in i] for i in x]
+    x = [torch.cat(tuple(i), dim =2) for i in x]
+    return torch.cat(tuple(x), dim =0)
+
+'''
+397 function calls in 0.029 seconds
+
+   Ordered by: internal time
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+      113    0.020    0.000    0.020    0.000 {built-in method cat}
+      114    0.008    0.000    0.008    0.000 {built-in method chunk}
+      132    0.001    0.000    0.001    0.000 {built-in method numpy.core.multiarray.array}
+        1    0.000    0.000    0.030    0.030 <ipython-input-215-4bd89e09b3ef>:1(scatter2dnew)
+       16    0.000    0.000    0.005    0.000 <ipython-input-215-4bd89e09b3ef>:33(<listcomp>)
+        1    0.000    0.000    0.000    0.000 {method 'cpu' of 'torch._C._TensorBase' objects}
+        1    0.000    0.000    0.030    0.030 <string>:1(<module>)
+        1    0.000    0.000    0.019    0.019 <ipython-input-215-4bd89e09b3ef>:40(<listcomp>)
+        1    0.000    0.000    0.001    0.001 <ipython-input-215-4bd89e09b3ef>:32(<listcomp>)
+        1    0.000    0.000    0.001    0.001 <ipython-input-215-4bd89e09b3ef>:41(<listcomp>)
+        1    0.000    0.000    0.030    0.030 {built-in method builtins.exec}
+        1    0.000    0.000    0.000    0.000 {method 'numpy' of 'torch._C._TensorBase' objects}
+        3    0.000    0.000    0.000    0.000 {method 'size' of 'torch._C._TensorBase' objects}
+        3    0.000    0.000    0.000    0.000 {built-in method builtins.isinstance}
+        1    0.000    0.000    0.000    0.000 {method 'detach' of 'torch._C._TensorBase' objects}
+        3    0.000    0.000    0.000    0.000 __init__.py:113(is_tensor)
+        3    0.000    0.000    0.000    0.000 {built-in method builtins.len}
+        1    0.000    0.000    0.000    0.000 {method 'disable' of '_lsprof.Profiler' objects}
+
+'''
+
+
+class gather2dcf(nn.Module):
+	def __init__(self, ksize, kstride):
+		super(gather2dc, self).__init__()
+		self.ksize = ksize
+		self.kstride = kstride
+
+	def forward(self, input, indices):
+		asize = list(indices.size()) 
+		isize = list(input.size())
+		ksize = self.ksize
+		kstride = self.kstride
+		x = np.array(torch.chunk(input, chunks = isize[0], dim = 0), dtype = torch.Tensor)
+	    x = np.array([np.array(torch.chunk(i, chunks = isize[2]//ksize[0], dim = 2), dtype = torch.Tensor) for i in x], dtype= torch.Tensor)
+	    x = np.array([np.array([np.array(torch.chunk(j, chunks = isize[3]//ksize[1], dim =3), dtype= torch.Tensor) for j in i], dtype= torch.Tensor)for i in x], dtype= torch.Tensor)
+
+	    ind = indices.cpu().detach().numpy()
+	    temp = x[ind[:,0],ind[:,1],ind[:,2]]
+	    return torch.cat(tuple(temp), dim = 0)
+		
+
+
+class scatter2dcf(nn.Module):
+	def __init__(self, ksize, kstride):
+		super(scatter2dc, self).__init__()
+		self.ksize = ksize
+		self.kstride = kstride
+
+	def forward(self, input, gathered, indices):
+		isize = list(input.size())
+		gsize = list(gathered.size())
+		ksize = self.ksize
+		kstride = self.kstride
+		
+	    x = np.array(torch.chunk(input, chunks = isize[0], dim = 0), dtype = torch.Tensor)
+	    x = np.array([np.array(torch.chunk(i, chunks = isize[2]//ksize[0], dim = 2), dtype = torch.Tensor) for i in x], dtype= torch.Tensor)
+	    x = np.array([np.array([np.array(torch.chunk(j, chunks = isize[3]//ksize[1], dim =3), dtype= torch.Tensor) for j in i], dtype= torch.Tensor)for i in x], dtype= torch.Tensor)
+	    
+	    g = np.array(torch.chunk(gathered, chunks = gsize[0], dim =0), dtype = torch.Tensor)
+	    ind = indices.cpu().detach().numpy()
+	    
+	    x[ind[:,0],ind[:,1],ind[:,2]] = g
+	    
+	    x = [[torch.cat(tuple(j) , dim = 3) for j in i] for i in x]
+	    x = [torch.cat(tuple(i), dim =2) for i in x]
+	    return torch.cat(tuple(x), dim =0)
